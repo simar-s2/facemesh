@@ -1,0 +1,9 @@
+# keep the build context small: data and results are mounted at run time, never copied in
+.git
+.venv
+data
+runs
+exports
+**/__pycache__
+.pytest_cache
+*.md
