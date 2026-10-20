@@ -85,7 +85,7 @@ def make_noisy_scan(clean_vertices, num_points, noise_std, hole_radius, outlier_
 class FaceMeshDataset(Dataset):
     def __init__(self, face_data, indices, normalization, num_scan_points=2048,
                  noise_mm=1.5, hole_radius_mm=20.0, outlier_fraction=0.02,
-                 units_to_mm=1000.0, is_training=True):
+                 units_to_mm=1000.0, augment_stretch=0.0, is_training=True):
         self.face_data = face_data
         self.indices = indices
         self.normalization = normalization
@@ -93,6 +93,7 @@ class FaceMeshDataset(Dataset):
         self.noise_std = noise_mm / units_to_mm             # convert mm into data units
         self.hole_radius = hole_radius_mm / units_to_mm
         self.outlier_fraction = outlier_fraction
+        self.augment_stretch = augment_stretch
         self.is_training = is_training
 
     def __len__(self):
@@ -107,6 +108,12 @@ class FaceMeshDataset(Dataset):
         # training: fresh noise every time (a new OS-seeded generator, so DataLoader workers never repeat
         # each other); validation: seeded by mesh index so every epoch is scored on identical scans
         rng = np.random.default_rng() if self.is_training else np.random.default_rng(int(mesh_index))
+        if self.is_training and self.augment_stretch > 0:
+            # stretch this head a little along each axis: a cheap way to invent new people from only ~10
+            stretch = rng.uniform(1 - self.augment_stretch, 1 + self.augment_stretch, size=3).astype(np.float32)
+            center = self.normalization["center"]
+            neutral_vertices = (neutral_vertices - center) * stretch + center
+            target_vertices = (target_vertices - center) * stretch + center
         noisy_scan = make_noisy_scan(target_vertices, self.num_scan_points, self.noise_std,
                                      self.hole_radius, self.outlier_fraction, rng)
 
