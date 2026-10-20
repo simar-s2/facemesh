@@ -1,0 +1,6 @@
+# torch is not listed on purpose: the Docker base image already has it.
+# On a laptop: pip install torch -r requirements.txt
+numpy
+trimesh
+usd-core
+pytest
