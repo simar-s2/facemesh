@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# big or generated files: datasets live in S3, checkpoints and exports can be remade
+data/
+runs/
+exports/
+*.npz
+*.pt
+
+# macOS
+.DS_Store
