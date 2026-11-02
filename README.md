@@ -16,7 +16,7 @@
 
 <br>
 
-<img src="docs/images/hero.gif" width="640" alt="Side by side: the model's predicted expression for a person it never saw in training, next to the real motion, colored by how far each part of the face moves.">
+<img src="docs/images/hero.gif" width="640" alt="A noisy, unordered point cloud of a real person's face on the left turns into a clean 5,023-vertex template mesh on the right, both slowly turning. The person was never seen in training.">
 
 </div>
 
@@ -89,12 +89,18 @@ flowchart LR
 
 Mean vertex error in millimeters, lower is better. **New people:** the last 2 people are held out of training. **Seen people:** every 10th frame is held out, everyone is in training. For scan cleanup, the reference is "output the average face".
 
-**CoMA** (20,466 real face meshes, 12 people, 12 expressions, FLAME template):
+**CoMA** (20,465 real face meshes, 12 people, 12 expressions, 5,023-vertex FLAME template, 30 epochs):
 
 | | expression: baseline | expression: model | scan cleanup: average face | scan cleanup: model |
 |---|---|---|---|---|
-| New people | COMA_RESULT | COMA_RESULT | COMA_RESULT | COMA_RESULT |
-| Seen people | COMA_RESULT | COMA_RESULT | COMA_RESULT | COMA_RESULT |
+| New people | **1.58** | COMA_NEW_EXPRESSION | 5.28 | **2.67** |
+| Seen people | 1.41 | **0.45** | 4.32 | **0.83** |
+
+On people it has trained on, the model is about 3x better than the baseline at expressions and 5x better than the average face at scan cleanup. On new people it still cleans scans 2x better than the average face. COMA_NEW_PEOPLE_SENTENCE
+
+<p align="center">
+  <img src="docs/images/expression.gif" width="640" alt="Side by side for a person never seen in training: the model's predicted mouth_side expression next to the real motion, colored by how far each part of the face moves. The model moves the right region in the right direction but not as far.">
+</p>
 
 **Fake data** (12 people, 12 expressions, 642 vertices, 100 epochs):
 
@@ -103,11 +109,7 @@ Mean vertex error in millimeters, lower is better. **New people:** the last 2 pe
 | New people | 0.122 | 0.153 | 3.87 | **0.78** |
 | Seen people | 0.166 | **0.014** | 4.70 | **0.30** |
 
-On fake data each person's expression strength is random and invisible in their neutral face, so for a new person nothing can beat the average. The baseline wins that one cell by design. Everywhere else the model wins by a wide margin.
-
-<p align="center">
-  <img src="docs/images/scan_cleanup.png" width="640" alt="A noisy, holey point cloud of a face on the left, and the clean template mesh the model produces from it on the right.">
-</p>
+On fake data each person's expression strength is random and invisible in their neutral face, so for a new person nothing can beat the average. The baseline wins that one cell by design.
 
 **What helped**, measured on fake data:
 
@@ -139,7 +141,7 @@ It checks that every mesh shares one template (5,023 vertices for FLAME) and sto
 <a name="gpu-training"></a>
 ## ☁️ GPU training
 
-**On a Mac.** Training uses the Apple GPU automatically. At CoMA size, an epoch takes about 50 s on an M1 Pro:
+**On a Mac.** Training uses the Apple GPU automatically. At CoMA size, an epoch takes about 70 s on an M1 Pro, so both splits take a little over an hour:
 
 ```bash
 caffeinate -i .venv/bin/python -m facemesh.train --data data/coma.npz --out_dir runs/coma_new_people --epochs 30 --num_workers 3
@@ -189,6 +191,20 @@ caffeinate -i .venv/bin/python -m facemesh.train --data data/coma.npz --out_dir 
 | Noisy scan has the requested size | The scan simulator always returns N points |
 | USD file has every frame | Time samples and point values survive a write and read |
 
+## 📚 Citation
+
+The CoMA dataset asks that results using it cite the paper:
+
+```bibtex
+@inproceedings{COMA:ECCV18,
+  title     = {Generating 3D faces using Convolutional Mesh Autoencoders},
+  author    = {Ranjan, Anurag and Bolkart, Timo and Sanyal, Soubhik and Black, Michael J.},
+  booktitle = {European Conference on Computer Vision (ECCV)},
+  pages     = {725--741},
+  year      = {2018}
+}
+```
+
 ## 📄 License
 
-[MIT](LICENSE). The CoMA dataset has its own license and is not included.
+[MIT](LICENSE) for the code. The CoMA dataset is for non-commercial research only, has its own license, and is not included.
