@@ -157,6 +157,10 @@ COMA_FAQ_NEW_PEOPLE
 
 ```bash
 .venv/bin/python -m pytest tests     # 5 tests, about 1 second
+
+# regenerate the images in this README (needs: pip install matplotlib pillow)
+.venv/bin/python scripts/render_readme_media.py --data data/coma.npz \
+    --checkpoint runs/coma_subject/best.pt --subject FaceTalk_170915_00223_TA
 ```
 
 | Test | What it protects |
