@@ -7,6 +7,7 @@ Expected layout after you download and unzip CoMA (needs a free account at coma.
 
 Usage:
     python scripts/preprocess_coma.py --coma_root path/to/COMA_data --out data/coma.npz
+    python scripts/preprocess_coma.py --coma_root path/to/COMA_data --out data/coma_small.npz --frame_step 3
 """
 
 import argparse
@@ -20,6 +21,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--coma_root", required=True)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--frame_step", type=int, default=1,
+                        help="keep every Nth frame; neighbouring frames are nearly identical, so 3 loses little")
     args = parser.parse_args()
 
     coma_root = Path(args.coma_root)
@@ -41,6 +44,8 @@ def main():
                 continue
             frame_files = sorted(expression_folder.glob("*.ply"))
             for frame_number, frame_file in enumerate(frame_files):
+                if frame_number % args.frame_step != 0:
+                    continue   # frame 0 is always kept, so the neutral face is unchanged
                 # process=False is important: by default trimesh merges and reorders vertices,
                 # which would break the vertex to vertex match between meshes
                 mesh = trimesh.load(frame_file, process=False)
