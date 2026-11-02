@@ -49,10 +49,10 @@ It checks that every mesh shares one template (5,023 vertices for FLAME) and sto
 **2. Train.**
 
 ```bash
-.venv/bin/python -m facemesh.train --data data/coma.npz --out_dir runs/coma_subject --epochs 30
+.venv/bin/python -m facemesh.train --data data/coma.npz --out_dir runs/coma_subject --epochs 30 --baseline_correction
 ```
 
-Training prints the baseline first (the number to beat), then the untrained model as epoch 0, then both jobs' error in millimeters every epoch. The best checkpoint goes to `best.pt` and the full history to `metrics.json`. Add `--split interpolation` to hold out frames instead of people.
+Training prints the baseline first (the number to beat), then the untrained model as epoch 0, then both jobs' error in millimeters every epoch. The best checkpoint goes to `best.pt` and the full history to `metrics.json`. To hold out frames instead of people, use `--split interpolation` and leave out `--baseline_correction`, which only helps with new people.
 
 **3. Run it.** Animate a person, one `.usda` per expression:
 
@@ -100,13 +100,13 @@ Mean vertex error in millimeters, lower is better. **New people:** the last 2 pe
 
 | | expression: baseline | expression: model | scan cleanup: average face | scan cleanup: model |
 |---|---|---|---|---|
-| New people | **1.58** | COMA_NEW_EXPRESSION | 5.28 | **2.67** |
+| New people | 1.577 | 1.575 (tie) | 5.28 | **2.59** |
 | Seen people | 1.41 | **0.45** | 4.32 | **0.83** |
 
-On people it has trained on, the model is about 3x better than the baseline at expressions and 5x better than the average face at scan cleanup. On new people it still cleans scans 2x better than the average face. COMA_NEW_PEOPLE_SENTENCE
+On people it has trained on, the model is about 3x better than the baseline at expressions and 5x better than the average face at scan cleanup. On new people it still cleans scans 2x better than the average face. Predicting a *new* person's expressions from only their neutral face is the hard part: trained normally, the model reached 1.90 mm, worse than the baseline, because 10 training people are not enough to learn how an unseen face will move. The new-people row uses `--baseline_correction`, which starts from the baseline and learns only a correction on top, so it ties the baseline instead of losing to it, and it also cleans scans slightly better (2.59 versus 2.67 mm).
 
 <p align="center">
-  <img src="docs/images/expression.gif" width="640" alt="Side by side for a person never seen in training: the model's predicted mouth_side expression next to the real motion, colored by how far each part of the face moves. The model moves the right region in the right direction but not as far.">
+  <img src="docs/images/expression.gif" width="640" alt="Side by side for a person never seen in training: the model's predicted mouth_side expression next to the real motion, colored by how far each part of the face moves. The model moves the right region in the right direction, slightly less than the real face.">
 </p>
 
 <a name="blender"></a>
@@ -120,8 +120,8 @@ File → Import → Universal Scene Description, pick an expression `.usda`, the
 **On a Mac.** Training uses the Apple GPU automatically. At CoMA size, an epoch takes about 70 s on an M1 Pro, so both splits take a little over an hour:
 
 ```bash
-caffeinate -i .venv/bin/python -m facemesh.train --data data/coma.npz --out_dir runs/coma_new_people --epochs 30 --num_workers 3
-caffeinate -i .venv/bin/python -m facemesh.train --data data/coma.npz --out_dir runs/coma_seen_people --epochs 30 --num_workers 3 --split interpolation
+caffeinate -i .venv/bin/python -m facemesh.train --data data/coma.npz --out_dir runs/coma_subject --epochs 30 --num_workers 3 --baseline_correction
+caffeinate -i .venv/bin/python -m facemesh.train --data data/coma.npz --out_dir runs/coma_interpolation --epochs 30 --num_workers 3 --split interpolation
 ```
 
 `caffeinate -i` keeps the Mac awake. The results above were trained this way.
@@ -141,7 +141,7 @@ caffeinate -i .venv/bin/python -m facemesh.train --data data/coma.npz --out_dir 
 <a name="faq"></a>
 ## ❓ FAQ
 
-COMA_FAQ_NEW_PEOPLE
+**Why doesn't it beat the baseline at expressions on new people?** The model only sees a new person's neutral face, and with 10 training people it cannot reliably tell from face shape alone how strongly someone will move. Trained normally it memorizes the training people and does worse than the average (1.90 versus 1.58 mm). With `--baseline_correction` it starts from the average and ties it. More people in training, or a few frames of the new person, would be the next step.
 
 **Why no BatchNorm?** The shared encoder sees clean neutral faces and noisy scans. BatchNorm's running averages would become a blend of both and match neither at test time.
 
