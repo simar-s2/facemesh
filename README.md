@@ -38,26 +38,33 @@ python3 -m venv .venv
 .venv/bin/pip install torch -r requirements.txt
 ```
 
-No dataset yet? Make a fake one in the same format and train on it (about 8 minutes on an M1 Pro):
+**1. Get the data.** Request access to [CoMA](https://coma.is.tue.mpg.de), unzip it so you have `COMA_data/<person>/<expression>/*.ply`, and turn it into one file:
 
 ```bash
-.venv/bin/python scripts/make_fake_dataset.py --out data/fake.npz
-.venv/bin/python -m facemesh.train --data data/fake.npz --out_dir runs/fake --epochs 100
+.venv/bin/python scripts/preprocess_coma.py --coma_root path/to/COMA_data --out data/coma.npz
 ```
 
-Training prints the baseline first (the number to beat), then the untrained model as epoch 0, then both jobs' error in millimeters every epoch. The best checkpoint goes to `runs/fake/best.pt` and the full history to `runs/fake/metrics.json`.
+It checks that every mesh shares one template (5,023 vertices for FLAME) and stops with the file name if one doesn't. Add `--frame_step 3` to keep every third frame: neighbouring frames are nearly identical, so training gets about 3x faster for little loss.
 
-Export one animation per expression for a person the model never trained on:
+**2. Train.**
 
 ```bash
-.venv/bin/python -m facemesh.export_usd expressions --checkpoint runs/fake/best.pt \
-    --data data/fake.npz --subject fake_subject_11 --out_dir exports/fake_subject_11
+.venv/bin/python -m facemesh.train --data data/coma.npz --out_dir runs/coma_subject --epochs 30
 ```
 
-Clean up a scan (any `.ply` or `.obj`, in meters, roughly aligned with the template):
+Training prints the baseline first (the number to beat), then the untrained model as epoch 0, then both jobs' error in millimeters every epoch. The best checkpoint goes to `best.pt` and the full history to `metrics.json`. Add `--split interpolation` to hold out frames instead of people.
+
+**3. Run it.** Animate a person, one `.usda` per expression:
 
 ```bash
-.venv/bin/python -m facemesh.export_usd fit --checkpoint runs/fake/best.pt \
+.venv/bin/python -m facemesh.export_usd expressions --checkpoint runs/coma_subject/best.pt \
+    --data data/coma.npz --subject FaceTalk_170915_00223_TA --out_dir exports/new_person
+```
+
+Clean up a scan (any `.ply` or `.obj`, in meters, facing the same way as the template):
+
+```bash
+.venv/bin/python -m facemesh.export_usd fit --checkpoint runs/coma_subject/best.pt \
     --scan my_scan.ply --out_dir exports/my_scan
 ```
 
@@ -82,7 +89,7 @@ flowchart LR
 - **Time features.** Time goes in as `[t, sin(πt), cos(πt), sin(2πt), cos(2πt)]`, because expressions rise and fall over a clip.
 - **Loss.** L1 per vertex, plus an edge-length term that keeps the surface smooth instead of crumpled.
 - **Baseline.** For each expression and tenth of the clip, the average motion over training people. The model has to beat it to be worth anything.
-- **Simulated scans.** Every training sample gets a fresh fake scan of its clean mesh: a hole, 1.5 mm jitter, 2% stray points, shuffled. The clean mesh is the answer key, so scan pairs are free and unlimited.
+- **Simulated scans.** Every training sample gets a freshly simulated scan of its clean mesh: a hole, 1.5 mm jitter, 2% stray points, shuffled. The clean mesh is the answer key, so scan pairs are free and unlimited.
 
 <a name="results"></a>
 ## 📊 Results
@@ -102,41 +109,10 @@ On people it has trained on, the model is about 3x better than the baseline at e
   <img src="docs/images/expression.gif" width="640" alt="Side by side for a person never seen in training: the model's predicted mouth_side expression next to the real motion, colored by how far each part of the face moves. The model moves the right region in the right direction but not as far.">
 </p>
 
-**Fake data** (12 people, 12 expressions, 642 vertices, 100 epochs):
-
-| | expression: baseline | expression: model | scan cleanup: average face | scan cleanup: model |
-|---|---|---|---|---|
-| New people | 0.122 | 0.153 | 3.87 | **0.78** |
-| Seen people | 0.166 | **0.014** | 4.70 | **0.30** |
-
-On fake data each person's expression strength is random and invisible in their neutral face, so for a new person nothing can beat the average. The baseline wins that one cell by design.
-
-**What helped**, measured on fake data:
-
-| Change | Effect |
-|---|---|
-| No BatchNorm in the shared encoder | Held-out error 0.45 to 0.29 mm (earlier version, 3 epochs). It sees clean faces and noisy scans, so its saved averages fit neither. |
-| Random head stretch, up to 5% per axis | Scan cleanup on new people 1.89 to 0.78 mm. Ten people become endless slightly different people. |
-| 100 epochs instead of 30 | Helps with stretching. Without it, the model overfits after epoch 6. |
-| Fair checkpoint choice | Each job scored as a fraction of its simple answer, so the larger scan error no longer picks the epoch alone. |
-| Learning a correction on top of the baseline | Did not help: it learned nothing beyond the baseline. Off by default (`--baseline_correction`). |
-| Hiding the identity code at random | Worse on both splits. Off by default (`--identity_dropout`). |
-
 <a name="blender"></a>
 ## 🎬 Open it in Blender
 
 File → Import → Universal Scene Description, pick an expression `.usda`, then press play. Each file is one mesh, Y-up, in meters, at 30 fps, with one time sample per frame (60 frames).
-
-<a name="real-data"></a>
-## 🗂️ Real data (CoMA)
-
-Request access at [coma.is.tue.mpg.de](https://coma.is.tue.mpg.de), unzip so you have `COMA_data/<person>/<expression>/*.ply`, then:
-
-```bash
-.venv/bin/python scripts/preprocess_coma.py --coma_root path/to/COMA_data --out data/coma.npz
-```
-
-It checks that every mesh shares one template (5,023 vertices for FLAME) and stops with the file name if one doesn't. Add `--frame_step 3` to keep every third frame. Neighbouring frames are nearly identical, so training gets about 3x faster for little loss.
 
 <a name="gpu-training"></a>
 ## ☁️ GPU training
@@ -165,9 +141,9 @@ caffeinate -i .venv/bin/python -m facemesh.train --data data/coma.npz --out_dir 
 <a name="faq"></a>
 ## ❓ FAQ
 
-**Why does the model lose to the baseline on new people with fake data?** Each fake person's expression strength is random and has nothing to do with their face shape, so the best guess for a new person is the average, which is exactly what the baseline predicts. On people it has seen, the model learns their strength and is 12x better than the baseline.
+COMA_FAQ_NEW_PEOPLE
 
-**Why no BatchNorm?** The shared encoder sees clean neutral faces and noisy scans. BatchNorm's running averages became a blend of both and matched neither at test time. Removing it cut held-out error by a third.
+**Why no BatchNorm?** The shared encoder sees clean neutral faces and noisy scans. BatchNorm's running averages would become a blend of both and match neither at test time.
 
 **Can it clean up any scan?** It needs the scan in meters and roughly lined up with the template (same position and facing). Real scanner output usually needs a rigid alignment step first.
 
