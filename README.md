@@ -117,16 +117,7 @@ File → Import → Universal Scene Description, pick an expression `.usda`, the
 <a name="gpu-training"></a>
 ## ☁️ GPU training
 
-**On a Mac.** Training uses the Apple GPU automatically. At CoMA size, an epoch takes about 70 s on an M1 Pro, so both splits take a little over an hour:
-
-```bash
-caffeinate -i .venv/bin/python -m facemesh.train --data data/coma.npz --out_dir runs/coma_subject --epochs 30 --num_workers 3 --baseline_correction
-caffeinate -i .venv/bin/python -m facemesh.train --data data/coma.npz --out_dir runs/coma_interpolation --epochs 30 --num_workers 3 --split interpolation
-```
-
-`caffeinate -i` keeps the Mac awake. The results above were trained this way.
-
-**On AWS.** The Docker image (`pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime`) and `scripts/train_on_aws.sh` train both splits on one GPU machine:
+The Docker image (`pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime`) and `scripts/train_on_aws.sh` train both splits on one GPU machine:
 
 1. Upload the data: `aws s3 cp data/coma.npz s3://YOUR_BUCKET/data/coma.npz`
 2. Launch a **g5.xlarge** (one NVIDIA A10G) with the **Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu)**, 100 GB of disk, and an IAM role that can read and write the bucket.
