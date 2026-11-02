@@ -4,33 +4,75 @@
 
 # FaceMesh
 
-**One PyTorch network that animates 3D faces and turns messy face scans into clean, animation-ready meshes.**
+**A PyTorch model that animates 3D faces and cleans up noisy face scans.**
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-111827?style=flat&logo=python&logoColor=white)](requirements.txt)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.5%2B-EE4C2C?style=flat&logo=pytorch&logoColor=white)](facemesh/model.py)
-[![OpenUSD](https://img.shields.io/badge/export-OpenUSD-111827?style=flat)](facemesh/export_usd.py)
 [![Docker](https://img.shields.io/badge/Docker-CUDA_12.4-2496ED?style=flat&logo=docker&logoColor=white)](Dockerfile)
 [![License: MIT](https://img.shields.io/badge/license-MIT-3b82f6?style=flat)](LICENSE)
 
-<a href="#quick-start">⚡️ Quick start</a> • <a href="#how-it-works">🔬 How it works</a> • <a href="#results">📊 Results</a> • <a href="#blender">🎬 Blender</a> • <a href="#gpu-training">☁️ GPU training</a> • <a href="#faq">❓ FAQ</a>
-
 <br>
 
-<img src="docs/images/hero.gif" width="640" alt="A noisy, unordered point cloud of a real person's face on the left turns into a clean 5,023-vertex template mesh on the right, both slowly turning. The person was never seen in training.">
+<img src="docs/images/hero.gif" width="640" alt="A noisy point cloud of a person's face on the left and the clean face mesh the model makes from it on the right. The model never saw this person during training.">
 
 </div>
 
 ## ✨ What it does
 
-- **Animates a face.** Give it a person's neutral face, an expression and a time from 0 to 1, and it predicts every vertex of the face at that moment. Sixty time steps make an animation.
-- **Cleans up scans.** Give it a raw point cloud of a face, in any order, with noise, a hole and stray points, and it returns a clean face on the standard template: fixed vertex count, fixed vertex order, ready to rig and animate.
-- Does both with one shared PointNet encoder and two small decoders.
-- Exports animated USD files that open in Blender.
-- Always reports against a simple baseline, on people it has never seen and on frames it has never seen.
-- Trains on an Apple Silicon GPU, an NVIDIA GPU or a CPU, with a Docker image and an AWS script for cloud GPUs.
+FaceMesh is one neural network that does two jobs:
 
-<a name="quick-start"></a>
-## ⚡️ Quick start
+1. **Animate a face.** Give it someone's resting face, an expression (like a smile) and a point in time. It returns the face at that moment. Ask for 60 points in time and you get an animation.
+2. **Clean up a 3D scan.** Give it a messy scan of a face: a cloud of points with noise, gaps and stray points. It returns a clean face mesh with the same layout as every other face, so it can be animated.
+
+The output is saved as USD files, which open in Blender.
+
+I trained it on [CoMA](https://coma.is.tue.mpg.de), a dataset of 20,465 3D face meshes: 12 people, each making 12 expressions.
+
+## 🔬 How it works
+
+```mermaid
+flowchart LR
+    face(["resting face"]) --> encoder["encoder"]
+    scan(["noisy scan"]) --> encoder
+    encoder --> animate["expression decoder<br/>+ expression + time"]
+    encoder --> clean["cleanup decoder"]
+    animate --> moving(["face at that moment"])
+    clean --> mesh(["clean face mesh"])
+```
+
+- **Encoder.** Turns a set of 3D points into 256 numbers that describe the face. It's a PointNet: the same small network runs on every point, then it keeps the maximum of each number across all points. Taking the maximum means the order of the points doesn't matter, which is what you need for scans.
+- **Expression decoder.** Takes those numbers plus the expression and the time, and predicts how far each point of the face moves from its resting position.
+- **Cleanup decoder.** Takes the scan's numbers and predicts how far each point is from the average face.
+- **Training scans are simulated.** I take a clean face mesh, cut a hole in it, add noise and some stray points, and shuffle the points. The clean mesh is the answer.
+- **Loss.** It compares each predicted point with the real one, plus the lengths of the mesh edges so the surface stays smooth.
+
+## 📊 Results
+
+Error is the average distance between the predicted and real face points, in millimeters. Lower is better.
+
+I tested it two ways:
+
+- **New people:** 2 of the 12 people are left out of training completely.
+- **Seen people:** every 10th frame is left out, but everyone appears in training.
+
+To check that the model actually learned something, I compare it with a simple baseline: the average movement for each expression at each point in time. For scan cleanup, the comparison is just outputting the average face.
+
+| | Expression: baseline | Expression: model | Scan cleanup: average face | Scan cleanup: model |
+|---|---|---|---|---|
+| New people | 1.58 | 1.58 | 5.28 | **2.59** |
+| Seen people | 1.41 | **0.45** | 4.32 | **0.83** |
+
+- For people it trained on, the model is about 3x better than the baseline at expressions and 5x better at scan cleanup.
+- For new people, scan cleanup is still 2x better.
+- The hard part is guessing how a *new* person's face will move from only their resting face. With just 10 people to learn from, the model can't do better than the average. Trained normally, it was worse (1.90 mm). So for new people I use `--baseline_correction`, which starts from the average and only learns small adjustments on top.
+
+<p align="center">
+  <img src="docs/images/expression.gif" width="640" alt="For a person the model never saw: its predicted expression next to the real one, colored by how much each part of the face moves. The model moves the right area in the right direction, slightly less than the real face.">
+</p>
+
+## ⚡️ Run it
+
+**Setup**
 
 ```bash
 git clone https://github.com/simar-s2/facemesh && cd facemesh
@@ -38,133 +80,65 @@ python3 -m venv .venv
 .venv/bin/pip install torch -r requirements.txt
 ```
 
-**1. Get the data.** Request access to [CoMA](https://coma.is.tue.mpg.de), unzip it so you have `COMA_data/<person>/<expression>/*.ply`, and turn it into one file:
+**1. Get the data.** Request access to [CoMA](https://coma.is.tue.mpg.de) and unzip it. Then turn the 20,000 files into one:
 
 ```bash
 .venv/bin/python scripts/preprocess_coma.py --coma_root path/to/COMA_data --out data/coma.npz
 ```
 
-It checks that every mesh shares one template (5,023 vertices for FLAME) and stops with the file name if one doesn't. Add `--frame_step 3` to keep every third frame: neighbouring frames are nearly identical, so training gets about 3x faster for little loss.
-
-**2. Train.**
+**2. Train.** For new people:
 
 ```bash
 .venv/bin/python -m facemesh.train --data data/coma.npz --out_dir runs/coma_subject --epochs 30 --baseline_correction
 ```
 
-Training prints the baseline first (the number to beat), then the untrained model as epoch 0, then both jobs' error in millimeters every epoch. The best checkpoint goes to `best.pt` and the full history to `metrics.json`. To hold out frames instead of people, use `--split interpolation` and leave out `--baseline_correction`, which only helps with new people.
+For seen people, use `--split interpolation` instead of `--baseline_correction`. Training prints the baseline, then the error after every epoch, and saves the best model to `best.pt`.
 
-**3. Run it.** Animate a person, one `.usda` per expression:
+**3. Use it.** Make one animation per expression for a person:
 
 ```bash
 .venv/bin/python -m facemesh.export_usd expressions --checkpoint runs/coma_subject/best.pt \
     --data data/coma.npz --subject FaceTalk_170915_00223_TA --out_dir exports/new_person
 ```
 
-Clean up a scan (any `.ply` or `.obj`, in meters, facing the same way as the template):
+Clean up a scan (a `.ply` or `.obj` file, in meters, facing forward):
 
 ```bash
 .venv/bin/python -m facemesh.export_usd fit --checkpoint runs/coma_subject/best.pt \
     --scan my_scan.ply --out_dir exports/my_scan
 ```
 
-<a name="how-it-works"></a>
-## 🔬 How it works
+To watch an animation, open Blender, go to File → Import → Universal Scene Description, pick a `.usda` file and press play.
 
-```mermaid
-flowchart LR
-    neutral(["neutral face<br/>fixed vertex order"]) --> encoder["PointNet encoder<br/>shared weights"]
-    scan(["noisy scan<br/>any order, any size"]) --> encoder
-    encoder -->|"identity code"| expression["expression decoder<br/>+ expression + time"]
-    encoder -->|"scan code"| fit["fit decoder"]
-    expression --> animated(["face at time t"])
-    fit --> cleaned(["clean template face"])
-    animated --> usd["USD export"]
-    cleaned --> usd
-    usd --> blender(["Blender"])
-```
+## ☁️ Training on a GPU
 
-- **PointNet encoder.** The same small network runs on every point, then a max over all points keeps the strongest response per feature. Max ignores order, so a shuffled scan gives exactly the same result. A test checks this.
-- **Two decoders.** Both predict *offsets*: how far each vertex moves from the neutral face (animation) or from the average face (scan cleanup). Their last layer starts at zero, so an untrained model returns "no change", and training starts from a sensible answer.
-- **Time features.** Time goes in as `[t, sin(πt), cos(πt), sin(2πt), cos(2πt)]`, because expressions rise and fall over a clip.
-- **Loss.** L1 per vertex, plus an edge-length term that keeps the surface smooth instead of crumpled.
-- **Baseline.** For each expression and tenth of the clip, the average motion over training people. The model has to beat it to be worth anything.
-- **Simulated scans.** Every training sample gets a freshly simulated scan of its clean mesh: a hole, 1.5 mm jitter, 2% stray points, shuffled. The clean mesh is the answer key, so scan pairs are free and unlimited.
+The repo has a Docker image and a script for training on an AWS GPU:
 
-<a name="results"></a>
-## 📊 Results
+1. Upload the data to S3: `aws s3 cp data/coma.npz s3://YOUR_BUCKET/data/coma.npz`
+2. Start a **g5.xlarge** instance with the Deep Learning Base GPU AMI (Ubuntu) and an IAM role that can use the bucket.
+3. SSH in, clone the repo, and run `BUCKET=YOUR_BUCKET ./scripts/train_on_aws.sh`. It builds the Docker image, trains both tests and copies the results back to S3.
+4. Shut the instance down when it's done. It costs about $1 an hour.
 
-Mean vertex error in millimeters, lower is better. **New people:** the last 2 people are held out of training. **Seen people:** every 10th frame is held out, everyone is in training. For scan cleanup, the reference is "output the average face".
+## 💡 Things I learned
 
-**CoMA** (20,465 real face meshes, 12 people, 12 expressions, 5,023-vertex FLAME template, 30 epochs):
-
-| | expression: baseline | expression: model | scan cleanup: average face | scan cleanup: model |
-|---|---|---|---|---|
-| New people | 1.577 | 1.575 (tie) | 5.28 | **2.59** |
-| Seen people | 1.41 | **0.45** | 4.32 | **0.83** |
-
-On people it has trained on, the model is about 3x better than the baseline at expressions and 5x better than the average face at scan cleanup. On new people it still cleans scans 2x better than the average face. Predicting a *new* person's expressions from only their neutral face is the hard part: trained normally, the model reached 1.90 mm, worse than the baseline, because 10 training people are not enough to learn how an unseen face will move. The new-people row uses `--baseline_correction`, which starts from the baseline and learns only a correction on top, so it ties the baseline instead of losing to it, and it also cleans scans slightly better (2.59 versus 2.67 mm).
-
-<p align="center">
-  <img src="docs/images/expression.gif" width="640" alt="Side by side for a person never seen in training: the model's predicted mouth_side expression next to the real motion, colored by how far each part of the face moves. The model moves the right region in the right direction, slightly less than the real face.">
-</p>
-
-<a name="blender"></a>
-## 🎬 Open it in Blender
-
-File → Import → Universal Scene Description, pick an expression `.usda`, then press play. Each file is one mesh, Y-up, in meters, at 30 fps, with one time sample per frame (60 frames).
-
-<a name="gpu-training"></a>
-## ☁️ GPU training
-
-The Docker image (`pytorch/pytorch:2.5.1-cuda12.4-cudnn9-runtime`) and `scripts/train_on_aws.sh` train both splits on one GPU machine:
-
-1. Upload the data: `aws s3 cp data/coma.npz s3://YOUR_BUCKET/data/coma.npz`
-2. Launch a **g5.xlarge** (one NVIDIA A10G) with the **Deep Learning Base OSS Nvidia Driver GPU AMI (Ubuntu)**, 100 GB of disk, and an IAM role that can read and write the bucket.
-3. SSH in, then:
-   ```bash
-   git clone https://github.com/simar-s2/facemesh && cd facemesh
-   BUCKET=YOUR_BUCKET ./scripts/train_on_aws.sh
-   ```
-   It builds the image, trains both splits with bfloat16 mixed precision, and syncs `runs/` back to S3.
-4. **Terminate the instance when it finishes.** It costs about $1 an hour while it runs.
-
-<a name="faq"></a>
-## ❓ FAQ
-
-**Why doesn't it beat the baseline at expressions on new people?** The model only sees a new person's neutral face, and with 10 training people it cannot reliably tell from face shape alone how strongly someone will move. Trained normally it memorizes the training people and does worse than the average (1.90 versus 1.58 mm). With `--baseline_correction` it starts from the average and ties it. More people in training, or a few frames of the new person, would be the next step.
-
-**Why no BatchNorm?** The shared encoder sees clean neutral faces and noisy scans. BatchNorm's running averages would become a blend of both and match neither at test time.
-
-**Can it clean up any scan?** It needs the scan in meters and roughly lined up with the template (same position and facing). Real scanner output usually needs a rigid alignment step first.
-
-**My meshes came out scrambled.** Load them with `trimesh.load(path, process=False)`. By default trimesh merges and reorders vertices, which silently breaks the vertex-to-vertex match the whole model relies on.
-
-**`torch.load` refuses the checkpoint.** PyTorch 2.6+ only loads plain tensors by default, and the checkpoint also stores NumPy arrays. FaceMesh loads its own checkpoints with `weights_only=False`.
-
-**Training stopped with "Shared memory manager connection has timed out".** The Mac went to sleep under the data loader. Run with `caffeinate -i`, or use `--num_workers 0`.
+- **Always compare against a simple baseline.** My first results looked fine until I compared them with the average movement and saw the model was losing on new people.
+- **Load meshes with `trimesh.load(path, process=False)`.** By default trimesh reorders the points, which silently breaks everything without any error.
+- **Don't use BatchNorm in a shared encoder.** Mine sees both clean faces and noisy scans, so BatchNorm's averages ended up fitting neither.
+- **A small dataset needs augmentation.** Randomly stretching each head by up to 5% during training helped the model handle people it hadn't seen.
 
 ## 🛠️ Development
 
 ```bash
-.venv/bin/python -m pytest tests     # 5 tests, about 1 second
-
-# regenerate the images in this README (needs: pip install matplotlib pillow)
-.venv/bin/python scripts/render_readme_media.py --data data/coma.npz \
-    --checkpoint runs/coma_subject/best.pt --subject FaceTalk_170915_00223_TA
+.venv/bin/python -m pytest tests    # 5 quick checks
 ```
 
-| Test | What it protects |
-|---|---|
-| Encoder ignores point order | Same scan, any order, same answer |
-| Untrained model returns the neutral face | Zero-initialized decoders and offset prediction |
-| Untrained model with the offset table returns the baseline | The baseline-correction option and its time bins |
-| Noisy scan has the requested size | The scan simulator always returns N points |
-| USD file has every frame | Time samples and point values survive a write and read |
+The tests check that point order doesn't change the encoder's output, that an untrained model returns the resting face, that simulated scans have the right size, and that USD files save every frame.
+
+To redo the images in this README: `pip install matplotlib pillow`, then run `scripts/render_readme_media.py`.
 
 ## 📚 Citation
 
-The CoMA dataset asks that results using it cite the paper:
+Results using CoMA should cite the paper:
 
 ```bibtex
 @inproceedings{COMA:ECCV18,
@@ -178,4 +152,4 @@ The CoMA dataset asks that results using it cite the paper:
 
 ## 📄 License
 
-[MIT](LICENSE) for the code. The CoMA dataset is for non-commercial research only, has its own license, and is not included.
+[MIT](LICENSE) for the code. CoMA has its own license (non-commercial research only) and is not included in this repo.
